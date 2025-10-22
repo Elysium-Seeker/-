@@ -70,6 +70,26 @@ function parseArticleResponse(text: string): Article[] {
     return articles;
 }
 
+
+/**
+ * Calculates the Jaccard similarity between two strings based on their words.
+ * @param str1 The first string.
+ * @param str2 The second string.
+ * @returns A similarity score between 0 and 1.
+ */
+function calculateTitleSimilarity(str1: string, str2: string): number {
+  const normalize = (s: string) => s.toLowerCase().replace(/[^\w\s]/g, '');
+  const words1 = new Set(normalize(str1).split(/\s+/).filter(Boolean));
+  const words2 = new Set(normalize(str2).split(/\s+/).filter(Boolean));
+  
+  if (words1.size === 0 || words2.size === 0) return 0;
+
+  const intersection = new Set([...words1].filter(word => words2.has(word)));
+  const union = new Set([...words1, ...words2]);
+  
+  return intersection.size / union.size;
+}
+
 export async function fetchDigitalEconomyArticles(filters: FilterOptions): Promise<{ articles: Article[]; sources: GroundingSource[] }> {
   try {
     const today = new Date();
@@ -124,7 +144,7 @@ ${topicFocusInstruction}
       },
     });
 
-    const articles = parseArticleResponse(response.text);
+    const parsedArticles = parseArticleResponse(response.text);
     
     const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
     const sources: GroundingSource[] = groundingChunks
@@ -132,10 +152,36 @@ ${topicFocusInstruction}
         uri: chunk.web?.uri || '',
         title: chunk.web?.title || '',
       }))
-      .filter((source: GroundingSource) => source.uri);
+      .filter((source: GroundingSource) => source.uri && source.title);
 
     // Deduplicate sources based on URI
     const uniqueSources = Array.from(new Map(sources.map(item => [item.uri, item])).values());
+
+    // Match parsed articles with reliable grounding sources to correct the source URL.
+    // The model's generated text can sometimes contain hallucinated or incorrect URLs.
+    // The grounding metadata provides the true source. We match by title similarity.
+    const articles = parsedArticles.map(article => {
+      const originalSource = article.source;
+      let bestMatchUri = originalSource;
+      let bestScore = 0.0;
+
+      for (const source of uniqueSources) {
+        const score = calculateTitleSimilarity(article.title, source.title);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatchUri = source.uri;
+        }
+      }
+
+      // Use a confidence threshold to avoid bad matches.
+      // If a good match is found, replace the article's source with the reliable one.
+      if (bestScore > 0.2) {
+        return { ...article, source: bestMatchUri };
+      } else {
+        // otherwise, stick with the original parsed URL
+        return { ...article, source: originalSource };
+      }
+    });
 
     return { articles, sources: uniqueSources };
 
