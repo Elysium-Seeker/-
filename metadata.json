@@ -1,0 +1,5 @@
+{
+  "name": "Digital Economy Article Aggregator",
+  "description": "An AI-powered agent that finds and summarizes recent, authoritative articles on the digital economy using Google Search grounding.",
+  "requestFramePermissions": []
+}
